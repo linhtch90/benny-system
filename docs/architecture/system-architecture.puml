@@ -1,0 +1,110 @@
+@startuml system-architecture
+top to bottom direction
+skinparam backgroundColor #FFFFFF
+skinparam roundcorner 10
+skinparam shadowing false
+skinparam defaultFontName "Helvetica, Arial, sans-serif"
+skinparam defaultFontSize 12
+skinparam ArrowColor #334155
+skinparam ArrowFontColor #1E293B
+skinparam ArrowFontSize 11
+skinparam PackageBorderColor #64748B
+skinparam PackageFontColor #0F172A
+skinparam PackageFontStyle bold
+skinparam ComponentBorderColor #334155
+skinparam DatabaseBorderColor #334155
+skinparam QueueBorderColor #334155
+skinparam nodesep 50
+skinparam ranksep 60
+skinparam padding 8
+
+title **Benny System — Cloud-Native High-Throughput Architecture (.NET 10 / C# 14 / ASP.NET Core 10)**\n//Real-Time Financial Transaction, Risk Intelligence & Petabyte Telemetry Platform//\n
+
+' ==========================================
+' TIER 1: EDGE & INGRESS LAYER
+' ==========================================
+actor "**External Clients / Partner Gateways**\n(Mobile/Web Apps, Payment Terminals, IoT Devices)" as Clients #E2E8F0
+
+package "1. Edge & Ingress Layer — Why: Single Secure Entry Point & Traffic Shield" as EdgePkg #F1F5F9 {
+    component "**Global Load Balancer / CDN**\n//Role: Perimeter Defense & Geo-Routing//\n• TLS 1.3 Termination & DDoS Protection\n• Multi-AZ Health-Checked Traffic Routing" as CDN #CBD5E1
+    component "**Benny Edge Gateway** (Port 8080)\n//Role: API Gateway, Auth & Traffic Throttling//\n• **Features**: OAuth2/JWT Authentication, Tenant Routing,\n  Token-Bucket Rate Limiting (prevents noisy-neighbor overload)\n• **Tech**: ASP.NET Core 10 + YARP + StackExchange.Redis Lua" as Gateway #93C5FD
+}
+
+' ==========================================
+' TIER 2: MULTI-TIER CACHE & CORE SERVICES
+' ==========================================
+package "2. Multi-Tier Low-Latency Cache (<1ms) — Why: Offload Databases & Guarantee Sub-Millisecond Lookups" as CachePkg #FEF3C7 {
+    database "**L1 In-Memory Cache (IMemoryCache / HybridCache)**\n//Role: Ultra-Fast Pod-Local Memory (<100µs)//\n• **Features**: Caches active tenant risk rules,\n  routing tables & hot reference configs\n• **Why**: Eliminates network hops on hot reads" as L1Cache #FDE68A
+    database "**L2 Distributed Cache (Redis 8 / Valkey Cluster)**\n//Role: Shared Cluster State & Coordination (<1ms)//\n• **Features**: 24h Idempotency-Key locks, real-time\n  account velocity counters, rate-limit buckets,\n  and Pub/Sub invalidation for L1 caches" as L2Cache #FCD34D
+    L1Cache <-right-> L2Cache : Near-Cache Sync &\nPub/Sub Invalidation Broadcast
+}
+
+package "3. Core Microservices Mesh — Why: Decoupled Fast-Path Write (<15ms P99) & CQRS Read Separation" as CorePkg #EFF6FF {
+    component "**Real-Time Risk Engine** (Port 8082)\n//Role: Instant Fraud & Compliance Decisioning//\n• **Why**: Blocks fraudulent/anomalous transactions\n  before any money or state is committed\n• **Features**: Evaluates account spending velocity,\n  tenant rule graphs & geo/amount anomalies in <5ms\n• **Tech**: .NET 10 Task.WhenAll (parallel fan-out)\n  + AsyncLocal<RequestContext> propagation" as RiskSvc #BFDBFE
+    component "**Ingestion & Command Service** (Port 8081)\n//Role: Frontline Command Coordinator//\n• **Why**: Absorbs massive traffic spikes & guarantees\n  exactly-once command acceptance\n• **Features**: Payload validation, Idempotency-Key\n  deduplication, orchestrates Risk check -> Ledger commit\n• **Tech**: ASP.NET Core 10 Controllers, HTTP/2,\n  Polly v8 CircuitBreaker & ConcurrencyLimiter" as IngestionSvc #BFDBFE
+    component "**CQRS Query & Analytics Service** (Port 8085)\n//Role: Dedicated Read-Only API for Dashboards//\n• **Why**: Separates heavy analytical/history reads\n  so they never slow down live transaction writes\n• **Features**: Tenant volume/risk summaries, live KPIs,\n  point-in-time transaction & telemetry lookups\n• **Tech**: ASP.NET Core 10 + Two-Tier Read-Through Cache" as QuerySvc #BFDBFE
+    component "**Transaction Ledger Service** (Port 8083)\n//Role: System of Record for Financial Balances//\n• **Why**: Guarantees strict ACID accounting consistency\n  and zero lost events (no dual-write bugs)\n• **Features**: Double-entry immutable ledger recording,\n  account balance debit/credit, atomic Outbox event write\n• **Tech**: EF Core 10 + Dapper (Npgsql), Optimistic Concurrency,\n  Transactional Outbox Pattern" as LedgerSvc #BFDBFE
+}
+
+' ==========================================
+' TIER 3: TRANSACTIONAL LEDGER & EVENT BACKBONE
+' ==========================================
+package "4. ACID Ledger & Durable Event Backbone — Why: Zero Data Loss & Asynchronous Decoupling" as EventPkg #FCE7F3 {
+    database "**PostgreSQL 17 HA Cluster**\n//Role: Authoritative ACID Transactional Store//\n• **Why**: Provides rock-solid relational integrity\n• **Tables**: ""account_balances"", ""ledger_entries"",\n  and ""outbox_events"" (polled via SKIP LOCKED)" as Postgres #A7F3D0
+    queue "**Apache Kafka Cluster (KRaft)**\n//Role: High-Throughput Durable Event Backbone//\n• **Why**: Buffers millions of events/sec & decouples\n  fast OLTP writes from heavy downstream analytics\n• **Topics**: ""benny.transactions.validated"",\n  ""benny.events.raw"", ""benny.dlq"" (Dead Letter Queue)" as Kafka #F9A8D4
+    component "**Stream Processor Service** (Port 8084)\n//Role: Async Event Consumer & Polyglot Router//\n• **Why**: Transforms raw event streams into analytical\n  projections and fans out bulk writes in parallel\n• **Features**: Micro-batching, rolling window rollups,\n  non-blocking retries & poison-pill DLQ isolation\n• **Tech**: C# 14 System.Threading.Channels + .Chunk(100)\n  + Task.WhenAll parallel sink writers" as StreamSvc #BFDBFE
+}
+
+' ==========================================
+' TIER 4: LARGE-SCALE POLYGLOT ANALYTICAL STORES
+' ==========================================
+package "5. Polyglot Big Data Layer — Why: Purpose-Built Storage Engines for Massive Data Volumes" as DataPkg #ECFDF5 {
+    database "**Apache Iceberg (S3 / MinIO)**\n//Role: Petabyte Cold Data Lakehouse//\n• **Why**: Low-cost long-term compliance archival\n• **Use Case**: Historical batch reprocessing\n  and AI/ML fraud model training over Parquet files" as Iceberg #A7F3D0
+    database "**ScyllaDB / Apache Cassandra**\n//Role: High-Velocity Time-Series Store//\n• **Why**: Handles millions of raw write IOPS\n  without lock contention\n• **Use Case**: Raw audit trail & device telemetry\n  partitioned by ""(tenant_id, bucket_day)""" as Scylla #6EE7B7
+    database "**ClickHouse OLAP Cluster**\n//Role: Real-Time Columnar Analytics Engine//\n• **Why**: Scans billions of rows in milliseconds\n• **Use Case**: Live tenant revenue, P95/P99 risk scores,\n  and real-time fraud trend aggregations" as ClickHouse #34D399
+}
+
+' ==========================================
+' TIER 5: OBSERVABILITY & AUTOSCALING FOOTNOTE
+' ==========================================
+package "6. Cloud-Native Observability & Autoscaling Control Plane — Why: Self-Healing & Elastic Scale" as ObsPkg #F3E8FF {
+    component "**OpenTelemetry .NET + Prometheus + Grafana LGTM**\n//Role: Full-Stack Zero-Blind-Spot Visibility//\n• End-to-end W3C TraceContext propagation across HTTP & Kafka\n• Prometheus RED/USE metrics, .NET 10 Server GC stats & structured logs" as OTel #D8B4FE
+    component "**Kubernetes HPA + KEDA Autoscaler**\n//Role: Elastic Cost & Capacity Management//\n• **HPA**: Scales stateless API pods (3 -> 100+) on RPS, CPU & P99 latency\n• **KEDA**: Scales Stream Processor pods (3 -> 64) on Kafka Consumer Lag" as KEDA #C084FC
+}
+
+' ==========================================
+' CLEAN ZERO-CROSSING LAYERED CONNECTIONS
+' ==========================================
+
+' Tier 1: Ingress
+Clients -down-> CDN : HTTPS / HTTP/2 & HTTP/3
+CDN -down-> Gateway : Routed Traffic
+
+' Tier 1 -> Tier 2 (Aligned Left-to-Right: L2Cache, IngestionSvc, QuerySvc)
+Gateway -down-> L2Cache : Token-Bucket\nRate Limit Check
+Gateway -down-> IngestionSvc : POST /api/v1/transactions\n(Fast Write Path)
+Gateway -down-> QuerySvc : GET /api/v1/analytics\n(CQRS Read Path)
+
+' Tier 2 Internal & Cache (L1 aligns with RiskSvc, L2 aligns with IngestionSvc)
+RiskSvc -up-> L1Cache : Parallel Rule &\nVelocity Lookup (<100µs)
+IngestionSvc -up-> L2Cache : 1. Idempotency Lock &\nDedup Lookup (<1ms)
+IngestionSvc -left-> RiskSvc : 2. Evaluate Risk\n(Typed HttpClient / HTTP2)
+IngestionSvc -down-> LedgerSvc : 3. Commit Approved\nTransaction
+
+' Tier 2 -> Tier 3 (Ledger -> Postgres -> Kafka -> StreamSvc)
+LedgerSvc -down-> Postgres : 4. Single ACID TX:\nLedger + Outbox Insert
+Postgres -right-> Kafka : 5. Outbox Relay / CDC\n(Zero Dual-Write)
+Kafka -right-> StreamSvc : 6. Consume Validated\nEvent Batches
+
+' Tier 3 -> Tier 4 (Aligned Left-to-Right: Iceberg, Scylla, ClickHouse)
+StreamSvc -down-> Iceberg : Parallel Sink 1:\nLakehouse Archival
+StreamSvc -down-> Scylla : Parallel Sink 2:\nRaw Time-Series Write
+StreamSvc -down-> ClickHouse : Parallel Sink 3:\nMicro-Batch OLAP Insert
+
+QuerySvc -down-> ClickHouse : Sub-Second OLAP &\nTelemetry Queries
+
+' Tier 4 -> Tier 5 (Visual Alignment)
+Iceberg -[hidden]down-> OTel
+Scylla -[hidden]down-> KEDA
+
+@enduml

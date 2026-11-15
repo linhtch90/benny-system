@@ -1,0 +1,94 @@
+@startuml scaling-resilience-topology
+top to bottom direction
+skinparam backgroundColor #FFFFFF
+skinparam roundcorner 10
+skinparam shadowing false
+skinparam defaultFontName "Helvetica, Arial, sans-serif"
+skinparam defaultFontSize 12
+skinparam ArrowColor #334155
+skinparam ArrowFontColor #1E293B
+skinparam ArrowFontSize 11
+skinparam PackageBorderColor #64748B
+skinparam PackageFontColor #0F172A
+skinparam PackageFontStyle bold
+skinparam ComponentBorderColor #334155
+skinparam DatabaseBorderColor #334155
+skinparam QueueBorderColor #334155
+skinparam nodesep 45
+skinparam ranksep 55
+skinparam padding 8
+
+title **Benny System — Elastic Horizontal Scaling, Polly v8 Resilience & High-Availability Topology (.NET 10)**\n//How the System Absorbs 100x Traffic Spikes & Survives Infrastructure Failures with Zero Data Loss//\n
+
+' ==============================================================================
+' LAYER 1: TRAFFIC SHIELD & MULTI-AZ ACTIVE-ACTIVE DISTRIBUTION
+' ==============================================================================
+package "1. Edge Traffic Shield & Multi-AZ Pod Topology — Why: Survive Full Zone Outages & Shed Overload Early" as Tier1 #F1F5F9 {
+    component "**Global Multi-AZ Ingress & Load Balancer**\n//Role: Active-Active Cross-Zone Traffic Distribution (AZ-A / AZ-B / AZ-C)//\n• **Zero Single Point of Failure**: Pods spread evenly via K8s ""topologySpreadConstraints"" & ""podAntiAffinity""\n• **Graceful Rolling Updates**: Readiness/Liveness/Startup probes + 30s connection draining (""ShutdownTimeout=30s"")" as IngressLB #CBD5E1
+    component "**Edge Rate Limiter & Idempotency Barrier**\n//Role: Backpressure & Duplicate Suppression at the Perimeter//\n• **Token-Bucket Rate Limiting**: Atomic Redis Lua script throttles abusive tenants (""HTTP 429 ProblemDetails"")\n• **Idempotency Lock**: Atomic ""SET NX EX"" prevents duplicate transactions during client retry storms" as EdgeShield #93C5FD
+    IngressLB -right-> EdgeShield : Filtered & Balanced\nMulti-AZ Traffic
+}
+
+' ==============================================================================
+' LAYER 2: DUAL ELASTIC HORIZONTAL AUTOSCALING LOOPS (HPA vs KEDA)
+' ==============================================================================
+package "2. Elastic Horizontal Compute Scaling — Why: Scale Write/Read APIs & Event Consumers Independently" as Tier2 #EFF6FF {
+    component "**Kubernetes HPA (Metric-Driven Autoscaler)**\n//Target: Stateless API Pods//\n• **Triggers**: CPU > 70%, Memory,\n  Prometheus RPS & P99 Latency > 12ms\n• **Scale Range**: **3 -> 100+ Pods** across 3 AZs" as HPA #FCD34D
+
+    component "**Synchronous Fast-Path & CQRS API Fleet**\n//Services: Gateway, Ingestion, Risk Engine, Ledger, Query//\n• **ASP.NET Core 10 Web API Controllers**: Millions of concurrent async I/O calls on Kestrel\n• **.NET 10 Server GC + DATAS**: ""< 0.5ms"" GC pauses under heavy allocation\n• **Dynamic PGO + ReadyToRun / Native AOT**: ""< 1s"" cold pod startup during scale-out bursts" as ApiFleet #BFDBFE
+
+    component "**Asynchronous Stream Worker Fleet**\n//Service: Benny Stream Processor Pods//\n• **C# 14 Channels & .Chunk(100)**: Backpressure-aware micro-batching\n• **Parallel Sink Fan-Out**: ""Task.WhenAll"" writes to\n  ScyllaDB, ClickHouse & Iceberg concurrently" as StreamFleet #BFDBFE
+
+    component "**KEDA (Event-Driven Autoscaler)**\n//Target: Kafka Consumer Group Pods//\n• **Trigger**: Apache Kafka Consumer Lag\n  ""> 5,000 msgs/partition"" on validated topics\n• **Scale Range**: **3 -> 64 Pods** (matches partitions)" as KEDA #FCD34D
+
+    HPA -right-> ApiFleet : Scales Out/In\non RPS & Latency
+    KEDA -left-> StreamFleet : Scales Out/In\non Kafka Lag
+}
+
+' ==============================================================================
+' LAYER 3: POLLY V8 IN-POD FAULT ISOLATION PIPELINE
+' ==============================================================================
+package "3. Polly v8 (Microsoft.Extensions.Resilience) Pipeline — Why: Prevent Cascading Failures & Downstream Overload" as Tier3 #FEF3C7 {
+    component "**1. ConcurrencyLimiter (Bulkhead) & Timeout**\n//Role: Concurrency Isolation & Fast Timeout//\n• **ConcurrencyLimiter**: Caps max concurrent async calls\n  per dependency (prevents DB/HTTP socket pool exhaustion)\n• **Timeout**: Strict ""5ms"" budget on Risk checks;\n  cancels slow sub-tasks immediately via ""CancellationTokenSource""" as Bulkhead #FDE68A
+
+    component "**2. Sliding-Window Circuit Breaker**\n//Role: Fail-Fast & Automatic Recovery//\n• Trips **OPEN** when failure ratio ""> 50%"" over 10s sampling window\n• **Graceful Fallback**: Serves stale L1 IMemoryCache rules or\n  routes non-critical telemetry to async buffer when tripped" as CircuitBreaker #FCD34D
+
+    component "**3. Exponential Backoff Retry + Jitter**\n//Role: Thundering-Herd Prevention//\n• Retries only transient network/timeout errors on idempotent calls\n• Adds randomized jitter (""UseJitter = true"") so scaled pods never retry in sync" as RetryJitter #FDE68A
+
+    Bulkhead -right-> CircuitBreaker : Passes Bounded\nFast Calls
+    CircuitBreaker -right-> RetryJitter : Wraps Transient\nFailures
+}
+
+' ==============================================================================
+' LAYER 4: STATEFUL HIGH-AVAILABILITY, REPLICATION & DLQ DURABILITY
+' ==============================================================================
+package "4. Stateful Data HA, Quorum Replication & Zero-Data-Loss Durability — Why: RPO = 0 & Self-Healing Storage" as Tier4 #ECFDF5 {
+    database "**L1 IMemoryCache + L2 Redis 8 Cluster**\n//Multi-AZ Cache & Coordination HA//\n• **Topology**: 3 Master Shards + 3 Replicas\n  spread across AZ-A, AZ-B, AZ-C\n• **Failover**: Automatic cluster promotion (<2s)\n• **Coherence**: Redis Pub/Sub broadcasts\n  evictions to all pod L1 caches" as RedisHA #A7F3D0
+
+    database "**PostgreSQL 17 HA (Patroni / Citus)**\n//ACID Ledger & Transactional Outbox HA//\n• **Primary (AZ-A) <-> Sync Standby (AZ-B)**:\n  Synchronous commit guarantees **Zero Data Loss (RPO=0)**\n• **Async Replicas (AZ-C)**: Read offload\n• **NpgsqlDataSource Bounded Pool**: Protects DB connections\n  from 100+ scaled .NET pods" as PostgresHA #6EE7B7
+
+    database "**ScyllaDB & ClickHouse Clusters**\n//Distributed Big Data & OLAP HA//\n• **ScyllaDB**: Masterless ring across 3 AZs\n  (""Replication Factor = 3"", ""LOCAL_QUORUM"")\n• **ClickHouse**: ""ReplicatedMergeTree"" shards\n  with automatic background compaction" as OlapHA #34D399
+
+    queue "**Apache Kafka (KRaft) + DLQ Pipeline**\n//Durable Event Backbone HA//\n• **Quorum**: 3+ Brokers across AZs, ""RF = 3"",\n  ""min.insync.replicas = 2"", Producer ""Acks = All""\n• **Self-Healing Consumers**: Non-blocking retry\n  topics (""1s -> 5s -> 30s"" backoff) -> isolates\n  poison pills into **""benny.dlq""** with trace headers" as KafkaHA #F9A8D4
+
+    RedisHA -[hidden]right-> PostgresHA
+    PostgresHA -[hidden]right-> OlapHA
+    OlapHA -[hidden]right-> KafkaHA
+}
+
+' ==============================================================================
+' CLEAN LAYER-TO-LAYER CONNECTIONS (TOP -> BOTTOM, ZERO CROSSINGS)
+' ==============================================================================
+
+EdgeShield -down-> ApiFleet : Verified Requests\nDispatched to Pods
+
+ApiFleet -down-> Bulkhead : Outbound Service & DB Calls\nEnter Resilience Pipeline
+StreamFleet -down-> RetryJitter : Sink & Broker Calls Protected\nby Backoff & CircuitBreaker
+
+Bulkhead -down-> RedisHA : Sub-1ms Cache &\nVelocity Lookups
+CircuitBreaker -down-> PostgresHA : ACID Ledger Commit +\nOutbox Event Write
+RetryJitter -down-> OlapHA : Parallel Micro-Batch\nAnalytical Writes
+RetryJitter -down-> KafkaHA : Outbox Relay & DLQ\nEvent Publishing
+KafkaHA -up-> KEDA : Reports Partition\nConsumer Lag
+
+@enduml

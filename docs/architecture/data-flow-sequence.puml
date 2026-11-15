@@ -1,0 +1,92 @@
+@startuml data-flow-sequence
+skinparam backgroundColor #FAFAFA
+skinparam roundcorner 6
+skinparam shadowing false
+skinparam defaultFontName "Inter, Helvetica, Arial, sans-serif"
+skinparam SequenceMessageAlign center
+
+title **Benny System — Low-Latency Request & Durable Event Processing Flow (.NET 10 / C# 14)**
+
+actor "Client" as Client
+participant "Edge Gateway\n(ASP.NET Core 10 + YARP)" as Gateway #93C5FD
+participant "Ingestion Service\n(Kestrel Web API Controllers)" as Ingestion #BFDBFE
+database "L1/L2 Cache\n(IMemoryCache + Redis)" as Cache #FCD34D
+participant "Risk Engine\n(Parallel Task.WhenAll)" as Risk #BFDBFE
+participant "Ledger Service\n(EF Core 10 / Dapper)" as Ledger #BFDBFE
+database "PostgreSQL 17\n(Write + Outbox)" as DB #A7F3D0
+queue "Apache Kafka\n(KRaft Cluster)" as Kafka #F9A8D4
+participant "Stream Processor\n(Channels + .Chunk)" as Stream #BFDBFE
+database "ScyllaDB + ClickHouse\n(Read & OLAP Stores)" as OLAP #34D399
+
+== Phase 1: Ultra-Low Latency Synchronous Ingestion & Validation (< 15ms P99) ==
+
+Client -> Gateway : POST /api/v1/events (Idempotency-Key, Payload)
+activate Gateway
+Gateway -> Cache : Check Rate Limit & JWT Blacklist (Redis Lua Script)
+Cache --> Gateway : Allowed (0.4ms)
+
+Gateway -> Ingestion : Forward Request (HTTP/2 + W3C TraceContext)
+activate Ingestion
+
+Ingestion -> Cache : GET Idempotency-Key (L1 -> L2 Redis)
+alt Duplicate Request Detected
+    Cache --> Ingestion : Cached Response Payload
+    Ingestion --> Gateway : 200 OK (Idempotent Replay)
+    Gateway --> Client : 200 OK
+else New Request
+    Cache --> Ingestion : Cache Miss (Lock Acquired with TTL)
+    
+    Ingestion -> Risk : Evaluate Risk & Routing (HTTP/2 / gRPC)
+    activate Risk
+    note right of Risk
+      Uses **.NET 10 Task.WhenAll + 5ms CTS**
+      to fan-out parallel checks:
+      1. Velocity check (Redis)
+      2. Rule evaluation (L1 IMemoryCache)
+      3. Anomaly score
+    end note
+    Risk -> Cache : MGET Velocity Counters & Rules
+    Cache --> Risk : Feature Vector (0.8ms)
+    Risk --> Ingestion : RiskDecision.Approved(score=0.02)
+    deactivate Risk
+
+    Ingestion -> Ledger : RecordCommand(TransactionPayload)
+    activate Ledger
+    Ledger -> DB : BEGIN TX\n1. INSERT INTO ledger_entries\n2. INSERT INTO outbox_events\nCOMMIT TX
+    DB --> Ledger : Committed
+    Ledger --> Ingestion : Ack (TxID)
+    deactivate Ledger
+
+    Ingestion -> Cache : SET Idempotency-Key = Result (TTL 24h)
+    Ingestion --> Gateway : 202 Accepted / 200 OK (TxID)
+    deactivate Ingestion
+    Gateway --> Client : 202 Accepted (TxID)
+    deactivate Gateway
+end
+
+== Phase 2: Asynchronous Durable Event Streaming & Large Data Handling ==
+
+DB -> Kafka : Outbox Relay / Debezium CDC publishes\nEvent to `benny.transactions.validated`
+activate Kafka
+
+Kafka -> Stream : Consume Batch (Confluent.Kafka Consumer Group)
+activate Stream
+
+par Parallel Polyglot Sink Writes
+    Stream -> OLAP : Async Batch Insert into ScyllaDB (Time-Series Log)
+else
+    Stream -> OLAP : Micro-Batch Append into ClickHouse (Real-Time Analytics)
+else
+    Stream -> Cache : Update Materialized View & Rolling Aggregations in Redis
+end
+
+alt Downstream Sink Transient Failure
+    Stream -> Stream : Exponential Backoff Retry + Jitter (Polly v8)
+else Poison Pill / Unrecoverable Failure
+    Stream -> Kafka : Publish to `benny.dlq` with Error Headers & Alert OTel
+end
+
+deactivate Stream
+deactivate Kafka
+
+@enduml

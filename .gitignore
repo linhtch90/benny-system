@@ -1,0 +1,36 @@
+# .NET / C# Build Outputs
+bin/
+obj/
+out/
+publish/
+artifacts/
+TestResults/
+*.user
+*.rsuser
+*.suo
+*.userosscache
+*.sln.docstates
+
+# .NET Core / NuGet
+project.lock.json
+project.fragment.lock.json
+*.nupkg
+*.snupkg
+!**/*.props
+!**/*.targets
+
+# IDEs (Visual Studio, Rider, VS Code)
+.vs/
+.idea/
+*.iws
+*.iml
+*.ipr
+.vscode/
+
+# OS & Temp
+.DS_Store
+Thumbs.db
+*.swp
+*~
+*.log
+.env
