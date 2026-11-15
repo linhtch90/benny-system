@@ -70,7 +70,9 @@ Before executing complex architectural or implementation tasks, consult the spec
   - [implement-caching-messaging](.agents/skills/implement-caching-messaging/SKILL.md)
   - [resilience-and-scaling-audit](.agents/skills/resilience-and-scaling-audit/SKILL.md)
   - [plantuml-architecture-sync](.agents/skills/plantuml-architecture-sync/SKILL.md)
-- **Architecture Diagrams**:
+- **Architecture Docs & Diagrams**:
+  - [architecture-deep-dive.md](docs/architecture/architecture-deep-dive.md)
+  - [implementation_plan.md](docs/implementation_plan.md)
   - [system-architecture.puml](docs/architecture/system-architecture.puml)
   - [data-flow-sequence.puml](docs/architecture/data-flow-sequence.puml)
   - [scaling-resilience-topology.puml](docs/architecture/scaling-resilience-topology.puml)
