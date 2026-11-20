@@ -1,0 +1,19 @@
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: benny-stream-processor-kafka-scaler
+spec:
+  scaleTargetRef:
+    name: benny-stream-processor
+  minReplicaCount: 3
+  maxReplicaCount: 64
+  pollingInterval: 5
+  cooldownPeriod: 60
+  triggers:
+    - type: kafka
+      metadata:
+        bootstrapServers: benny-kafka-bootstrap:9092
+        consumerGroup: benny-stream-processor
+        topic: benny.transactions.validated
+        lagThreshold: "5000"
+        offsetResetPolicy: earliest

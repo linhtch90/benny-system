@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\Libs\Benny.Common.Domain\Benny.Common.Domain.csproj" />
+    <ProjectReference Include="..\..\Libs\Benny.Observability\Benny.Observability.csproj" />
+    <ProjectReference Include="..\..\Libs\Benny.Caching\Benny.Caching.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.OpenApi" />
+    <PackageReference Include="Microsoft.Extensions.Http.Resilience" />
+    <PackageReference Include="Yarp.ReverseProxy" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,82 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: benny-ingestion-service
+  labels:
+    app: benny-ingestion-service
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: benny-ingestion-service
+  template:
+    metadata:
+      labels:
+        app: benny-ingestion-service
+    spec:
+      terminationGracePeriodSeconds: 35
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: benny-ingestion-service
+      containers:
+        - name: benny-ingestion-service
+          image: ghcr.io/linhtch90/benny-ingestion-service:latest
+          ports:
+            - containerPort: 8081
+          env:
+            - name: DOTNET_gcServer
+              value: "1"
+            - name: DOTNET_GCDynamicAdaptationMode
+              value: "1"
+            - name: DOTNET_TieredPGO
+              value: "1"
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "256Mi"
+            limits:
+              cpu: "1000m"
+              memory: "512Mi"
+          startupProbe:
+            httpGet:
+              path: /health/startup
+              port: 8081
+            failureThreshold: 12
+            periodSeconds: 2
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 8081
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: 8081
+            periodSeconds: 10
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh", "-c", "sleep 5"]
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: benny-ingestion-service-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: benny-ingestion-service
+  minReplicas: 3
+  maxReplicas: 100
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
